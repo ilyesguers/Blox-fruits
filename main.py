@@ -172,8 +172,11 @@ def send_captcha(chat_id, user_id):
         save_db(db)
 
     kb = types.InlineKeyboardMarkup(row_width=2)
-    for index, symbol in enumerate(symbols):
-        kb.add(types.InlineKeyboardButton(symbol, callback_data=f"captcha:{nonce}:{index}"))
+    buttons = [
+        types.InlineKeyboardButton(symbol, callback_data=f"captcha:{nonce}:{index}")
+        for index, symbol in enumerate(symbols)
+    ]
+    kb.add(*buttons)
     safe_send(
         chat_id,
         "🛡️ <b>تحقّق أمني سريع</b>\n\n"
@@ -1924,6 +1927,9 @@ def broadcast_copy(message):
 @bot.message_handler(content_types=["document", "video", "audio", "voice", "sticker", "animation"])
 def other_content_handler(message):
     uid = message.from_user.id
+    if not is_user_verified(uid):
+        send_captcha(message.chat.id, uid)
+        return
     if is_admin(uid):
         st = get_state(uid)
         if st and st["state"] == "admin_broadcast":
