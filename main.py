@@ -78,6 +78,13 @@ def _normalize_db(data):
     data["settings"].setdefault("ccp_number", CCP_NUMBER)
     data["settings"].setdefault("egypt_instapay_number", "")
     data["settings"].setdefault("egypt_vodafone_number", "")
+    data["settings"].setdefault("rate_flexy", DZD_PER_USD_FLEXY)
+    data["settings"].setdefault("rate_ccp", DZD_PER_USD_CCP)
+    data["settings"].setdefault("rate_egypt", EGP_PER_USD)
+    data["settings"].setdefault("fee_percent", FEE_PERCENT)
+    data["settings"].setdefault("referral_percent", REFERRAL_PERCENT)
+    data["settings"].setdefault("withdrawal_min_usd", 1.0)
+    data["settings"].setdefault("withdrawal_fee_percent", 0.0)
     data["settings"].setdefault("withdrawals_open", False)
     data["settings"].setdefault("ccp_enabled", True)
     data["settings"].setdefault("egypt_enabled", True)
@@ -199,6 +206,27 @@ def now_str():
 
 def money(x):
     return f"{float(x):.2f}"
+
+
+def get_setting_number(key, default):
+    try:
+        value = float(db.get("settings", {}).get(key, default))
+        return value if value >= 0 else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def get_rate(method):
+    key, default = {"flexy": ("rate_flexy", DZD_PER_USD_FLEXY), "ccp": ("rate_ccp", DZD_PER_USD_CCP), "egypt": ("rate_egypt", EGP_PER_USD)}[method]
+    return get_setting_number(key, default)
+
+
+def get_fee_percent():
+    return get_setting_number("fee_percent", FEE_PERCENT)
+
+
+def get_referral_percent():
+    return get_setting_number("referral_percent", REFERRAL_PERCENT)
 
 
 def normalize_amount(text):
@@ -358,9 +386,14 @@ def admin_inline_keyboard():
         types.InlineKeyboardButton("أرقام مصر", callback_data="adm_egypt_numbers", style="danger"),
     )
     kb.add(
-        types.InlineKeyboardButton("السحب: تشغيل/إيقاف", callback_data="adm_toggle_withdraw", style="primary"),
-        types.InlineKeyboardButton("فحص عضو", callback_data="adm_check_member", style="primary"),
+        types.InlineKeyboardButton("💵 أسعار الشراء", callback_data="adm_rates", style="primary"),
+        types.InlineKeyboardButton("💸 إعدادات السحب", callback_data="adm_withdraw_settings", style="primary"),
     )
+    kb.add(
+        types.InlineKeyboardButton("📊 العمولة والإحالة", callback_data="adm_fees", style="success"),
+        types.InlineKeyboardButton("السحب: تشغيل/إيقاف", callback_data="adm_toggle_withdraw", style="primary"),
+    )
+    kb.add(types.InlineKeyboardButton("فحص عضو", callback_data="adm_check_member", style="primary"))
     kb.add(
         types.InlineKeyboardButton("CCP: تشغيل/إيقاف", callback_data="adm_toggle_ccp", style="success"),
         types.InlineKeyboardButton("مصر: تشغيل/إيقاف", callback_data="adm_toggle_egypt", style="success"),
@@ -493,10 +526,13 @@ def send_admin_panel(chat_id, message_id=None):
         f"💰 السحب: <b>{status_w}</b>\n"
         f"🏦 CCP: <b>{status_ccp}</b>\n"
         f"🇪🇬 مصر: <b>{status_egy}</b>\n"
-        f"💵 سعر الفليكسي: <b>{DZD_PER_USD_FLEXY:,.0f} دج/$</b>\n"
-        f"🏦 سعر CCP: <b>{DZD_PER_USD_CCP:,.0f} دج/$</b>\n"
-        f"🇪🇬 سعر مصر: <b>{EGP_PER_USD:,.0f} جنيه/$</b>\n"
-        f"📊 العمولة: <b>{FEE_PERCENT:.0f}%</b>"
+        f"💵 سعر الفليكسي: <b>{get_rate('flexy'):,.0f} دج/$</b>\n"
+        f"🏦 سعر CCP: <b>{get_rate('ccp'):,.0f} دج/$</b>\n"
+        f"🇪🇬 سعر مصر: <b>{get_rate('egypt'):,.0f} جنيه/$</b>\n"
+        f"📊 عمولة الشراء: <b>{get_fee_percent():.1f}%</b>\n"
+        f"🔗 عمولة الإحالة: <b>{get_referral_percent():.1f}%</b>\n"
+        f"💸 أقل سحب: <b>{get_setting_number('withdrawal_min_usd', 1):.2f}$</b>\n"
+        f"💸 عمولة السحب: <b>{get_setting_number('withdrawal_fee_percent', 0):.1f}%</b>"
     )
 
     if message_id:
@@ -611,7 +647,7 @@ def main_menu_callback(call):
         text = (
             "🔗 <b>رابط الإحالة الخاص بك</b>\n\n"
             f"<code>{link}</code>\n\n"
-            f"شارك هذا الرابط وستكسب <b>{REFERRAL_PERCENT:.0f}%</b> من كل عملية شحن يقوم بها من يدخل عبر رابطك.\n\n"
+            f"شارك هذا الرابط وستكسب <b>{get_referral_percent():.1f}%</b> من كل عملية شحن يقوم بها من يدخل عبر رابطك.\n\n"
             f"💰 إجمالي ما كسبته من الإحالات: <b>{money(u.get('referral_earnings', 0))}$</b>"
         )
         try:
@@ -625,16 +661,16 @@ def main_menu_callback(call):
         text = (
             "ℹ️ <b>طريقة شراء الدولار</b>\n\n"
             "🇩🇿 <b>الجزائر - فليكسي:</b>\n"
-            f"• سعر: <b>1$ = {DZD_PER_USD_FLEXY:,.0f} دج</b>\n"
-            f"• عمولة: <b>{FEE_PERCENT:.0f}%</b>\n"
+            f"• سعر: <b>1$ = {get_rate('flexy'):,.0f} دج</b>\n"
+            f"• عمولة: <b>{get_fee_percent():.1f}%</b>\n"
             f"• الرقم: <code>{phone}</code>\n\n"
             "🇩🇿 <b>الجزائر - بريدي موب (CCP):</b>\n"
-            f"• سعر: <b>1$ = {DZD_PER_USD_CCP:,.0f} دج</b>\n"
-            f"• عمولة: <b>{FEE_PERCENT:.0f}%</b>\n"
+            f"• سعر: <b>1$ = {get_rate('ccp'):,.0f} دج</b>\n"
+            f"• عمولة: <b>{get_fee_percent():.1f}%</b>\n"
             f"• رقم الحساب: <code>{ccp}</code>\n\n"
             "🇪🇬 <b>مصر:</b>\n"
-            f"• سعر: <b>1$ = {EGP_PER_USD:,.0f} جنيه</b>\n"
-            f"• عمولة: <b>{FEE_PERCENT:.0f}%</b>\n"
+            f"• سعر: <b>1$ = {get_rate('egypt'):,.0f} جنيه</b>\n"
+            f"• عمولة: <b>{get_fee_percent():.1f}%</b>\n"
             "• طرق الدفع: إنستاباي / فودافون كاش\n\n"
             "⚠️ الحد الأدنى للشحن: <b>1$</b>"
         )
@@ -772,8 +808,8 @@ def pay_dz_callback(call):
         try:
             bot.edit_message_text(
                 f"📱 <b>شحن بالفليكسي</b>\n\n"
-                f"💵 السعر: <b>1$ = {DZD_PER_USD_FLEXY:,.0f} دج</b>\n"
-                f"📊 العمولة: <b>{FEE_PERCENT:.0f}%</b>\n\n"
+                f"💵 السعر: <b>1$ = {get_rate('flexy'):,.0f} دج</b>\n"
+                f"📊 العمولة: <b>{get_fee_percent():.1f}%</b>\n\n"
                 "اكتب مبلغ الفليكسي بالدينار الذي تريد إرساله.\n"
                 "مثال: <code>100000</code> أو <code>100.000</code>",
                 call.message.chat.id,
@@ -802,8 +838,8 @@ def pay_dz_callback(call):
         try:
             bot.edit_message_text(
                 f"🏦 <b>شحن ببريدي موب (CCP)</b>\n\n"
-                f"💵 السعر: <b>1$ = {DZD_PER_USD_CCP:,.0f} دج</b>\n"
-                f"📊 العمولة: <b>{FEE_PERCENT:.0f}%</b>\n"
+                f"💵 السعر: <b>1$ = {get_rate('ccp'):,.0f} دج</b>\n"
+                f"📊 العمولة: <b>{get_fee_percent():.1f}%</b>\n"
                 f"🏦 رقم الحساب: <code>{ccp}</code>\n\n"
                 "اكتب المبلغ الذي أرسلته بالدينار.\n"
                 "مثال: <code>50000</code>",
@@ -860,8 +896,8 @@ def pay_eg_callback(call):
     try:
         bot.edit_message_text(
             f"🇪🇬 <b>شحن عبر {method_name}</b>\n\n"
-            f"💵 السعر: <b>1$ = {EGP_PER_USD:,.0f} جنيه</b>\n"
-            f"📊 العمولة: <b>{FEE_PERCENT:.0f}%</b>\n"
+            f"💵 السعر: <b>1$ = {get_rate('egypt'):,.0f} جنيه</b>\n"
+            f"📊 العمولة: <b>{get_fee_percent():.1f}%</b>\n"
             f"📱 الرقم: <code>{eg_number}</code>\n\n"
             "اكتب المبلغ الذي أرسلته بالجنيه المصري.\n"
             "مثال: <code>6000</code>",
@@ -895,6 +931,10 @@ def text_handler(message):
 
     if is_admin(uid) and st:
         state = st["state"]
+
+        if state.startswith("admin_rate_") or state in ("admin_set_fee", "admin_set_referral", "admin_withdraw_min", "admin_withdraw_fee"):
+            process_admin_numeric_setting(message, state)
+            return
 
         if state == "admin_change_phone":
             process_change_phone_text(message)
@@ -985,8 +1025,8 @@ def process_purchase_amount(message, state_data):
         if raw is None or raw <= 0:
             safe_send(message.chat.id, "❌ المبلغ غير صحيح. أرسل مثلاً: <code>6000</code>")
             return
-        rate = EGP_PER_USD
-        fee = raw * (FEE_PERCENT / 100.0)
+        rate = get_rate("egypt")
+        fee = raw * (get_fee_percent() / 100.0)
         net = raw - fee
         usd = round(net / rate, 8)
         currency_label = "جنيه مصري"
@@ -1016,7 +1056,7 @@ def process_purchase_amount(message, state_data):
             f"🧾 <b>مراجعة العملية</b>\n\n"
             f"🇪🇬 الطريقة: <b>{method_name}</b>\n"
             f"💵 المبلغ: <b>{raw:,.0f} {currency_label}</b>\n"
-            f"📊 العمولة ({FEE_PERCENT:.0f}%): <b>{fee:,.0f} {currency_label}</b>\n"
+            f"📊 العمولة ({get_fee_percent():.1f}%): <b>{fee:,.0f} {currency_label}</b>\n"
             f"💰 المحتسب: <b>{net:,.0f} {currency_label}</b>\n"
             f"💲 سعر الدولار: <b>{rate:,.0f} {currency_label}</b>\n"
             f"💵 سيضاف لك: <b>{money(usd)}$</b>\n\n"
@@ -1031,8 +1071,8 @@ def process_purchase_amount(message, state_data):
             safe_send(message.chat.id, "❌ المبلغ غير صحيح. أرسل مثلاً: <code>100000</code>")
             return
 
-        rate = DZD_PER_USD_CCP if method == "ccp" else DZD_PER_USD_FLEXY
-        fee = raw * (FEE_PERCENT / 100.0)
+        rate = get_rate("ccp") if method == "ccp" else get_rate("flexy")
+        fee = raw * (get_fee_percent() / 100.0)
         net = raw - fee
         usd = round(net / rate, 8)
 
@@ -1060,7 +1100,7 @@ def process_purchase_amount(message, state_data):
             f"🧾 <b>مراجعة العملية</b>\n\n"
             f"🇩🇿 الطريقة: <b>{method_name}</b>\n"
             f"💵 المبلغ: <b>{raw:,.0f} دج</b>\n"
-            f"📊 العمولة ({FEE_PERCENT:.0f}%): <b>{fee:,.0f} دج</b>\n"
+            f"📊 العمولة ({get_fee_percent():.1f}%): <b>{fee:,.0f} دج</b>\n"
             f"💰 المحتسب: <b>{net:,.0f} دج</b>\n"
             f"💲 سعر الدولار: <b>{rate:,.0f} دج</b>\n"
             f"💵 سيضاف لك: <b>{money(usd)}$</b>\n\n"
@@ -1669,6 +1709,48 @@ def admin_callback(call):
         except Exception:
             pass
 
+    elif action == "adm_rates":
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        kb.add(
+            types.InlineKeyboardButton(f"🇩🇿 فليكسي: {get_rate('flexy'):,.0f} دج/$", callback_data="adm_rate_flexy", style="success"),
+            types.InlineKeyboardButton(f"🏦 CCP: {get_rate('ccp'):,.0f} دج/$", callback_data="adm_rate_ccp", style="primary"),
+            types.InlineKeyboardButton(f"🇪🇬 مصر: {get_rate('egypt'):,.0f} جنيه/$", callback_data="adm_rate_egypt", style="danger"),
+            types.InlineKeyboardButton("⬅️ رجوع", callback_data="adm_home", style="success"),
+        )
+        bot.edit_message_text("💵 <b>تعديل أسعار شراء الدولار</b>\nاختر السعر الذي تريد تغييره:", call.message.chat.id, call.message.message_id, reply_markup=kb)
+
+    elif action == "adm_withdraw_settings":
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        kb.add(
+            types.InlineKeyboardButton(f"💰 أقل سحب: {get_setting_number('withdrawal_min_usd', 1):.2f}$", callback_data="adm_set_withdraw_min", style="primary"),
+            types.InlineKeyboardButton(f"📊 عمولة السحب: {get_setting_number('withdrawal_fee_percent', 0):.1f}%", callback_data="adm_set_withdraw_fee", style="danger"),
+            types.InlineKeyboardButton("⬅️ رجوع", callback_data="adm_home", style="success"),
+        )
+        bot.edit_message_text("💸 <b>إعدادات السحب</b>\nاختر الإعداد الذي تريد تغييره:", call.message.chat.id, call.message.message_id, reply_markup=kb)
+
+    elif action == "adm_fees":
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        kb.add(
+            types.InlineKeyboardButton(f"📊 عمولة الشراء: {get_fee_percent():.1f}%", callback_data="adm_set_fee", style="primary"),
+            types.InlineKeyboardButton(f"🔗 عمولة الإحالة: {get_referral_percent():.1f}%", callback_data="adm_set_referral", style="success"),
+            types.InlineKeyboardButton("⬅️ رجوع", callback_data="adm_home", style="success"),
+        )
+        bot.edit_message_text("⚙️ <b>العمولات والمكافآت</b>\nاختر القيمة التي تريد تعديلها:", call.message.chat.id, call.message.message_id, reply_markup=kb)
+
+    elif action in ("adm_rate_flexy", "adm_rate_ccp", "adm_rate_egypt", "adm_set_fee", "adm_set_referral", "adm_set_withdraw_min", "adm_set_withdraw_fee"):
+        config = {
+            "adm_rate_flexy": ("admin_rate_flexy", "أرسل سعر الدولار الجديد للفليكسي بالدينار الجزائري."),
+            "adm_rate_ccp": ("admin_rate_ccp", "أرسل سعر الدولار الجديد لـ CCP بالدينار الجزائري."),
+            "adm_rate_egypt": ("admin_rate_egypt", "أرسل سعر الدولار الجديد بالجنيه المصري."),
+            "adm_set_fee": ("admin_set_fee", "أرسل عمولة الشراء كنسبة مئوية من 0 إلى 100."),
+            "adm_set_referral": ("admin_set_referral", "أرسل نسبة عمولة الإحالة من 0 إلى 100."),
+            "adm_set_withdraw_min": ("admin_withdraw_min", "أرسل أقل مبلغ للسحب بالدولار."),
+            "adm_set_withdraw_fee": ("admin_withdraw_fee", "أرسل عمولة السحب من 0 إلى 100%."),
+        }
+        state, prompt = config[action]
+        set_state(uid, state)
+        bot.edit_message_text(prompt + "\nأرسل رقمًا فقط، مثال: <code>25000</code>", call.message.chat.id, call.message.message_id, reply_markup=back_inline("adm_home"))
+
     elif action == "adm_toggle_withdraw":
         with db_lock:
             current = db["settings"].get("withdrawals_open", False)
@@ -1703,6 +1785,39 @@ def admin_callback(call):
             )
         except Exception:
             pass
+
+
+def process_admin_numeric_setting(message, state):
+    uid = message.from_user.id
+    try:
+        value = float((message.text or "").strip().replace(",", "."))
+    except ValueError:
+        safe_send(message.chat.id, "❌ أرسل رقمًا صحيحًا فقط.")
+        return
+    if value <= 0 or value > 1_000_000_000:
+        safe_send(message.chat.id, "❌ القيمة لازم تكون أكبر من صفر وأقل من مليار.")
+        return
+    mapping = {
+        "admin_rate_flexy": ("rate_flexy", "سعر فليكسي"),
+        "admin_rate_ccp": ("rate_ccp", "سعر CCP"),
+        "admin_rate_egypt": ("rate_egypt", "سعر مصر"),
+        "admin_set_fee": ("fee_percent", "عمولة الشراء"),
+        "admin_set_referral": ("referral_percent", "عمولة الإحالة"),
+        "admin_withdraw_min": ("withdrawal_min_usd", "أقل سحب"),
+        "admin_withdraw_fee": ("withdrawal_fee_percent", "عمولة السحب"),
+    }
+    if state not in mapping:
+        return
+    key, label = mapping[state]
+    if key in ("fee_percent", "referral_percent", "withdrawal_fee_percent") and value > 100:
+        safe_send(message.chat.id, "❌ النسبة لازم تكون بين 0 و100.")
+        return
+    with db_lock:
+        db["settings"][key] = value
+        save_db(db)
+    clear_state(uid)
+    safe_send(message.chat.id, f"✅ تم تحديث <b>{label}</b> إلى <code>{value:g}</code>.", reply_markup=admin_inline_keyboard())
+    send_admin_panel(message.chat.id)
 
 
 def process_change_phone_text(message):
