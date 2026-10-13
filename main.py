@@ -1953,10 +1953,14 @@ def captcha_callback(call):
         if not user or user.get("captcha_verified", True):
             bot.answer_callback_query(call.id, "تم التحقق أو انتهت المحاولة.")
             return
-        if nonce != user.get("captcha_nonce") or time.time() > float(user.get("captcha_expires", 0) or 0):
-            bot.answer_callback_query(call.id, "انتهى الوقت، أنشأنا لك اختباراً جديداً.")
+        if nonce != user.get("captcha_nonce"):
+            stale = True
+            expired = False
+        elif time.time() > float(user.get("captcha_expires", 0) or 0):
+            stale = False
             expired = True
         else:
+            stale = False
             expired = False
             if selected == int(user.get("captcha_answer", -1)):
                 user["captcha_verified"] = True
@@ -1978,6 +1982,9 @@ def captcha_callback(call):
                     user["captcha_blocked_until"] = time.time() + CAPTCHA_LOCK_SECONDS
                 save_db(db)
 
+    if stale:
+        bot.answer_callback_query(call.id, "هذه الكابتشا قديمة، استعمل آخر اختبار.")
+        return
     if expired:
         bot.answer_callback_query(call.id, "انتهى الوقت.")
         send_captcha(call.message.chat.id, call.from_user.id)
