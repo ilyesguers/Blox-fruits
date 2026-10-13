@@ -113,6 +113,7 @@ def load_db():
 
 
 def save_db(data):
+    from psycopg.types.json import Jsonb
     # Use one JSONB row so all existing bot features keep their current data shape,
     # while PostgreSQL provides durable storage across redeploys/restarts.
     with db_lock:
@@ -1846,7 +1847,6 @@ def main():
     print("===================================")
 
     configure_commands()
-    states.clear()
 
     while True:
         try:
