@@ -1318,7 +1318,7 @@ def purchase_callback(call):
             referral_bonus = 0.0
             referrer_id = u.get("referred_by")
             if referrer_id and db["users"].get(str(referrer_id)):
-                referral_bonus = round(usd_amount * (REFERRAL_PERCENT / 100.0), 8)
+                referral_bonus = round(usd_amount * (get_referral_percent() / 100.0), 8)
                 referrer = db["users"][str(referrer_id)]
                 referrer["balance"] = round(float(referrer.get("balance", 0)) + referral_bonus, 8)
                 referrer["referral_earnings"] = round(float(referrer.get("referral_earnings", 0)) + referral_bonus, 8)
@@ -1809,8 +1809,9 @@ def process_admin_numeric_setting(message, state):
     except ValueError:
         safe_send(message.chat.id, "❌ أرسل رقمًا صحيحًا فقط.")
         return
-    if value <= 0 or value > 1_000_000_000:
-        safe_send(message.chat.id, "❌ القيمة لازم تكون أكبر من صفر وأقل من مليار.")
+    zero_allowed = state in ("admin_set_fee", "admin_set_referral", "admin_withdraw_fee")
+    if value < 0 or (value == 0 and not zero_allowed) or value > 1_000_000_000:
+        safe_send(message.chat.id, "❌ القيمة غير صالحة لهذا الإعداد.")
         return
     mapping = {
         "admin_rate_flexy": ("rate_flexy", "سعر فليكسي"),
