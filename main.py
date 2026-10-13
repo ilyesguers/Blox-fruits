@@ -43,6 +43,7 @@ DEFAULT_DB = {
     "users": {},
     "purchases": {},
     "withdrawals": {},
+    "states": {},
     "counter": 1000
 }
 
@@ -81,6 +82,7 @@ def _normalize_db(data):
     data.setdefault("users", {})
     data.setdefault("purchases", {})
     data.setdefault("withdrawals", {})
+    data.setdefault("states", {})
     data.setdefault("counter", 1000)
     return data
 
@@ -130,6 +132,7 @@ def save_db(data):
 
 
 db = load_db()
+states = db.get("states", {})
 
 
 def now_str():
@@ -199,8 +202,13 @@ def get_user_by_id(uid):
 
 
 def set_state(uid, state, data=None):
-    with state_lock:
-        states[str(uid)] = {"state": state, "data": data or {}}
+    key = str(uid)
+    # Persist conversation/admin workflow state so restarts do not lose progress.
+    with db_lock:
+        with state_lock:
+            states[key] = {"state": state, "data": data or {}}
+            db["states"] = states
+        save_db(db)
 
 
 def get_state(uid):
@@ -209,8 +217,12 @@ def get_state(uid):
 
 
 def clear_state(uid):
-    with state_lock:
-        states.pop(str(uid), None)
+    key = str(uid)
+    with db_lock:
+        with state_lock:
+            states.pop(key, None)
+            db["states"] = states
+        save_db(db)
 
 
 def next_operation_id():
