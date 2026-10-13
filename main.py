@@ -127,7 +127,7 @@ def save_db(data):
                     ON CONFLICT (id)
                     DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
                     """,
-                    (json.dumps(data, ensure_ascii=False),),
+                    (Jsonb(data),),
                 )
             conn.commit()
 
