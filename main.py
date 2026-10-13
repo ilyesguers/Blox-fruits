@@ -2,6 +2,8 @@
 import json
 import os
 import re
+import secrets
+import random
 import threading
 import time
 from datetime import datetime
@@ -136,6 +138,58 @@ db = load_db()
 states = db.get("states", {})
 
 
+CAPTCHA_SYMBOLS = ["🐉", "⭐", "🍉", "🍎"]
+CAPTCHA_TIMEOUT_SECONDS = 120
+CAPTCHA_MAX_ATTEMPTS = 3
+CAPTCHA_LOCK_SECONDS = 60
+
+
+def is_user_verified(user_id):
+    user = db.get("users", {}).get(str(user_id))
+    # Existing users from before this feature remain trusted; only newly registered
+    # users explicitly marked False must complete the captcha.
+    return bool(user is not None and user.get("captcha_verified", True))
+
+
+def send_captcha(chat_id, user_id):
+    uid = str(user_id)
+    with db_lock:
+        user = db["users"].get(uid)
+        if not user:
+            return
+        blocked_until = float(user.get("captcha_blocked_until", 0) or 0)
+        remaining = int(blocked_until - time.time())
+        if remaining > 0:
+            safe_send(chat_id, f"🛡️ حاولت مرات كثيرة. عاود بعد {remaining} ثانية.")
+            return
+        symbols = list(CAPTCHA_SYMBOLS)
+        random.shuffle(symbols)
+        target = random.choice(symbols)
+        nonce = secrets.token_hex(4)
+        user["captcha_nonce"] = nonce
+        user["captcha_answer"] = symbols.index(target)
+        user["captcha_expires"] = time.time() + CAPTCHA_TIMEOUT_SECONDS
+        save_db(db)
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for index, symbol in enumerate(symbols):
+        kb.add(types.InlineKeyboardButton(symbol, callback_data=f"captcha:{nonce}:{index}"))
+    safe_send(
+        chat_id,
+        "🛡️ <b>تحقّق أمني سريع</b>\n\n"
+        f"اضغط على الرمز التالي: <b>{target}</b>\n"
+        "عندك دقيقتين لإكمال التحقق حتى تقدر تستعمل البوت.",
+        reply_markup=kb,
+    )
+
+
+def require_verified_callback(call):
+    if is_user_verified(call.from_user.id):
+        return True
+    bot.answer_callback_query(call.id, "🛡️ أكمل الكابتشا أولاً.")
+    return False
+
+
 def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -183,6 +237,8 @@ def get_user(user_obj):
                 "purchase_count": 0,
                 "withdrawal_count": 0,
                 "banned": False,
+                "captcha_verified": False,
+                "captcha_attempts": 0,
                 "referred_by": None,
                 "referral_earnings": 0.0,
             }
@@ -366,6 +422,10 @@ def start_command(message):
                     db["users"][str(uid)]["referred_by"] = referrer_id
                     save_db(db)
 
+    if not is_user_verified(uid):
+        send_captcha(message.chat.id, uid)
+        return
+
     clear_state(uid)
 
     try:
@@ -387,6 +447,9 @@ def start_command(message):
 
 @bot.message_handler(commands=["banantak"])
 def admin_command(message):
+    if not is_user_verified(message.from_user.id):
+        send_captcha(message.chat.id, message.from_user.id)
+        return
     if not is_admin(message.from_user.id):
         safe_send(message.chat.id, "❌ هذا الأمر خاص بالأدمن.")
         return
@@ -459,6 +522,8 @@ def send_main_menu(chat_id, message_id=None, edit=False):
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_main")
 def cb_back_main(call):
+    if not require_verified_callback(call):
+        return
     uid = call.from_user.id
     clear_state(uid)
     if is_admin(uid):
@@ -470,6 +535,8 @@ def cb_back_main(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "owner_back")
 def cb_owner_back(call):
+    if not require_verified_callback(call):
+        return
     clear_state(call.from_user.id)
     send_main_menu(call.message.chat.id, call.message.message_id, edit=True)
     bot.answer_callback_query(call.id)
@@ -477,6 +544,8 @@ def cb_owner_back(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "adm_home")
 def cb_adm_home(call):
+    if not require_verified_callback(call):
+        return
     if not is_admin(call.from_user.id):
         bot.answer_callback_query(call.id, "❌")
         return
@@ -487,6 +556,8 @@ def cb_adm_home(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
 def main_menu_callback(call):
+    if not require_verified_callback(call):
+        return
     uid = call.from_user.id
     u = get_user(call.from_user)
     bot.answer_callback_query(call.id)
@@ -606,6 +677,8 @@ def show_country_selection(chat_id, message_id=None):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("country_"))
 def country_callback(call):
+    if not require_verified_callback(call):
+        return
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
 
@@ -675,6 +748,8 @@ def country_callback(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_country")
 def cb_back_country(call):
+    if not require_verified_callback(call):
+        return
     bot.answer_callback_query(call.id)
     clear_state(call.from_user.id)
     show_country_selection(call.message.chat.id, call.message.message_id)
@@ -682,6 +757,8 @@ def cb_back_country(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pay_dz_"))
 def pay_dz_callback(call):
+    if not require_verified_callback(call):
+        return
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     method = call.data.split("pay_dz_")[1]
@@ -737,6 +814,8 @@ def pay_dz_callback(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pay_eg_"))
 def pay_eg_callback(call):
+    if not require_verified_callback(call):
+        return
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     method = call.data.split("pay_eg_")[1]
@@ -800,6 +879,10 @@ def text_handler(message):
 
     if u.get("banned"):
         safe_send(message.chat.id, "🚫 حسابك محظور من استخدام البوت.")
+        return
+
+    if not is_user_verified(uid):
+        send_captcha(message.chat.id, uid)
         return
 
     if text.startswith("/"):
@@ -985,6 +1068,8 @@ def process_purchase_amount(message, state_data):
 
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_purchase")
 def cb_confirm_purchase(call):
+    if not require_verified_callback(call):
+        return
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     st = get_state(uid)
@@ -1048,6 +1133,9 @@ def cb_confirm_purchase(call):
 @bot.message_handler(content_types=["photo"])
 def photo_handler(message):
     uid = message.from_user.id
+    if not is_user_verified(uid):
+        send_captcha(message.chat.id, uid)
+        return
     st = get_state(uid)
 
     if not st or st["state"] != "purchase_proof":
@@ -1150,6 +1238,8 @@ def send_purchase_to_admin(purchase):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("purchase_"))
 def purchase_callback(call):
+    if not require_verified_callback(call):
+        return
     if not is_admin(call.from_user.id):
         bot.answer_callback_query(call.id, "❌ غير مسموح.")
         return
@@ -1479,6 +1569,8 @@ def process_other_usd_amount(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("adm_"))
 def admin_callback(call):
+    if not require_verified_callback(call):
+        return
     uid = call.from_user.id
     if not is_admin(uid):
         bot.answer_callback_query(call.id, "❌ غير مسموح.")
@@ -1705,6 +1797,8 @@ def show_member_admin(message, user_id):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("member_"))
 def member_callback(call):
+    if not require_verified_callback(call):
+        return
     if not is_admin(call.from_user.id):
         bot.answer_callback_query(call.id, "❌ غير مسموح.")
         return
@@ -1836,6 +1930,71 @@ def other_content_handler(message):
             broadcast_copy(message)
             return
     safe_send(message.chat.id, "❌ هذا النوع من الرسائل غير مدعوم حالياً.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("captcha:"))
+def captcha_callback(call):
+    try:
+        _, nonce, selected_text = call.data.split(":", 2)
+        selected = int(selected_text)
+    except (ValueError, TypeError):
+        bot.answer_callback_query(call.id, "تحقق غير صالح.")
+        return
+
+    uid = str(call.from_user.id)
+    with db_lock:
+        user = db["users"].get(uid)
+        if not user or user.get("captcha_verified", True):
+            bot.answer_callback_query(call.id, "تم التحقق أو انتهت المحاولة.")
+            return
+        if nonce != user.get("captcha_nonce") or time.time() > float(user.get("captcha_expires", 0) or 0):
+            bot.answer_callback_query(call.id, "انتهى الوقت، أنشأنا لك اختباراً جديداً.")
+            expired = True
+        else:
+            expired = False
+            if selected == int(user.get("captcha_answer", -1)):
+                user["captcha_verified"] = True
+                user.pop("captcha_nonce", None)
+                user.pop("captcha_answer", None)
+                user.pop("captcha_expires", None)
+                user.pop("captcha_attempts", None)
+                user.pop("captcha_blocked_until", None)
+                save_db(db)
+                verified = True
+            else:
+                verified = False
+                attempts = int(user.get("captcha_attempts", 0) or 0) + 1
+                user["captcha_attempts"] = attempts
+                user.pop("captcha_nonce", None)
+                user.pop("captcha_answer", None)
+                user.pop("captcha_expires", None)
+                if attempts >= CAPTCHA_MAX_ATTEMPTS:
+                    user["captcha_blocked_until"] = time.time() + CAPTCHA_LOCK_SECONDS
+                save_db(db)
+
+    if expired:
+        bot.answer_callback_query(call.id, "انتهى الوقت.")
+        send_captcha(call.message.chat.id, call.from_user.id)
+        return
+    if verified:
+        bot.answer_callback_query(call.id, "✅ تم التحقق بنجاح!")
+        try:
+            bot.edit_message_text(
+                "✅ <b>تم التحقق بنجاح!</b>\nتقدر الآن تستعمل البوت.",
+                call.message.chat.id,
+                call.message.message_id,
+            )
+        except Exception:
+            pass
+        send_main_menu(call.message.chat.id)
+        return
+
+    if int(user.get("captcha_attempts", 0) or 0) >= CAPTCHA_MAX_ATTEMPTS:
+        bot.answer_callback_query(call.id, "تجاوزت المحاولات.")
+        safe_send(call.message.chat.id, "🚫 محاولات كثيرة. استنى دقيقة ثم أرسل /start.")
+    else:
+        bot.answer_callback_query(call.id, "❌ الرمز غير صحيح، جرّب من جديد.")
+        send_captcha(call.message.chat.id, call.from_user.id)
 
 
 def main():
