@@ -22,9 +22,7 @@ REFERRAL_PERCENT = 5.0
 FLEXY_PHONE = "05 - 06 - 07"
 CCP_NUMBER = "0079999"
 
-DATA_DIR = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", ".")
-os.makedirs(DATA_DIR, exist_ok=True)
-DB_FILE = os.path.join(DATA_DIR, "data.json")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 db_lock = threading.RLock()
@@ -49,35 +47,86 @@ DEFAULT_DB = {
 }
 
 
+def _db_connect():
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "Missing DATABASE_URL. Add a Railway PostgreSQL database and expose its "
+            "connection string as the DATABASE_URL service variable."
+        )
+    import psycopg
+    return psycopg.connect(DATABASE_URL, connect_timeout=10)
+
+
+def _ensure_db_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bot_state (
+                id SMALLINT PRIMARY KEY CHECK (id = 1),
+                data JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def _normalize_db(data):
+    data.setdefault("settings", {})
+    data["settings"].setdefault("flexy_phone", FLEXY_PHONE)
+    data["settings"].setdefault("ccp_number", CCP_NUMBER)
+    data["settings"].setdefault("egypt_instapay_number", "")
+    data["settings"].setdefault("egypt_vodafone_number", "")
+    data["settings"].setdefault("withdrawals_open", False)
+    data["settings"].setdefault("ccp_enabled", True)
+    data["settings"].setdefault("egypt_enabled", True)
+    data.setdefault("users", {})
+    data.setdefault("purchases", {})
+    data.setdefault("withdrawals", {})
+    data.setdefault("counter", 1000)
+    return data
+
+
 def load_db():
-    if not os.path.exists(DB_FILE):
-        save_db(DEFAULT_DB)
-        return json.loads(json.dumps(DEFAULT_DB))
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        data.setdefault("settings", {})
-        data["settings"].setdefault("flexy_phone", FLEXY_PHONE)
-        data["settings"].setdefault("ccp_number", CCP_NUMBER)
-        data["settings"].setdefault("egypt_instapay_number", "")
-        data["settings"].setdefault("egypt_vodafone_number", "")
-        data["settings"].setdefault("withdrawals_open", False)
-        data["settings"].setdefault("ccp_enabled", True)
-        data["settings"].setdefault("egypt_enabled", True)
-        data.setdefault("users", {})
-        data.setdefault("purchases", {})
-        data.setdefault("withdrawals", {})
-        data.setdefault("counter", 1000)
+    # All persistent bot state is stored in Railway PostgreSQL, not the container filesystem.
+    with _db_connect() as conn:
+        _ensure_db_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT data FROM bot_state WHERE id = 1")
+            row = cur.fetchone()
+        if row:
+            return _normalize_db(row[0])
+
+        # One-time best-effort import from the old JSON file, if it exists.
+        legacy_data = None
+        if os.path.exists("data.json"):
+            try:
+                with open("data.json", "r", encoding="utf-8") as f:
+                    legacy_data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                legacy_data = None
+
+        data = _normalize_db(legacy_data if isinstance(legacy_data, dict)
+                             else json.loads(json.dumps(DEFAULT_DB)))
+        save_db(data)
         return data
-    except Exception:
-        raise RuntimeError("database.json تالف. احذفه أو أصلحه.")
 
 
 def save_db(data):
-    temp_file = DB_FILE + ".tmp"
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(temp_file, DB_FILE)
+    # Use one JSONB row so all existing bot features keep their current data shape,
+    # while PostgreSQL provides durable storage across redeploys/restarts.
+    with db_lock:
+        with _db_connect() as conn:
+            _ensure_db_table(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO bot_state (id, data, updated_at)
+                    VALUES (1, %s, NOW())
+                    ON CONFLICT (id)
+                    DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+                    """,
+                    (json.dumps(data, ensure_ascii=False),),
+                )
+            conn.commit()
 
 
 db = load_db()
