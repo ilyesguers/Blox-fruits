@@ -1426,6 +1426,11 @@ def process_withdraw_amount_text(message):
         safe_send(message.chat.id, "❌ أدخل مبلغاً صحيحاً. مثال: <code>1.27</code>")
         return
 
+    min_withdraw = get_setting_number("withdrawal_min_usd", 1.0)
+    if amount < min_withdraw:
+        safe_send(message.chat.id, f"❌ أقل مبلغ للسحب هو <b>{money(min_withdraw)}$</b>.")
+        return
+
     if amount > balance:
         safe_send(message.chat.id, f"❌ رصيدك غير كافٍ. رصيدك: <b>{money(balance)}$</b>")
         return
@@ -1470,10 +1475,16 @@ def process_withdraw_binance_text(message):
         u["balance"] = round(current_balance - amount, 8)
         u["withdrawal_count"] = u.get("withdrawal_count", 0) + 1
 
+        withdrawal_fee_percent = get_setting_number("withdrawal_fee_percent", 0.0)
+        withdrawal_fee = round(amount * withdrawal_fee_percent / 100.0, 8)
+        payout_amount = round(amount - withdrawal_fee, 8)
         withdrawal = {
             "id": withdrawal_id,
             "user_id": uid,
             "usd": amount,
+            "fee_percent": withdrawal_fee_percent,
+            "fee_usd": withdrawal_fee,
+            "payout_usd": payout_amount,
             "binance_id": binance_id,
             "created_at": now_str(),
             "status": "pending",
@@ -1486,7 +1497,9 @@ def process_withdraw_binance_text(message):
     safe_send(
         message.chat.id,
         f"✅ تم تسجيل طلب السحب <b>{withdrawal_id}</b>.\n\n"
-        f"💵 المبلغ: <b>{money(amount)}$</b>\n"
+        f"💵 المبلغ المطلوب: <b>{money(amount)}$</b>\n"
+        f"📊 عمولة السحب: <b>{money(withdrawal_fee)}$ ({withdrawal_fee_percent:.1f}%)</b>\n"
+        f"💸 صافي التحويل: <b>{money(payout_amount)}$</b>\n"
         f"💰 الرصيد المتبقي: <b>{money(u['balance'])}$</b>\n\n"
         "⏳ سيتم إرسال الدولار خلال 1 دقيقة إلى 5 ساعات.\n"
         "📩 ستتلقى إشعاراً عند إتمام التحويل.\n"
@@ -1506,7 +1519,9 @@ def send_withdrawal_to_admin(withdrawal):
         "💸 <b>طلب سحب جديد</b>\n\n"
         f"🔢 العملية: <b>{withdrawal['id']}</b>\n"
         f"👤 العضو: {user_display(u)}\n"
-        f"💵 المبلغ: <b>{money(withdrawal['usd'])}$</b>\n"
+        f"💵 المبلغ المطلوب: <b>{money(withdrawal['usd'])}$</b>\n"
+        f"📊 العمولة: <b>{money(withdrawal.get('fee_usd', 0))}$</b>\n"
+        f"💸 صافي التحويل: <b>{money(withdrawal.get('payout_usd', withdrawal['usd']))}$</b>\n"
         f"🆔 Binance ID: <code>{withdrawal['binance_id']}</code>\n"
         f"🕒 الوقت: <b>{withdrawal['created_at']}</b>\n\n"
         "⚠️ تم خصم المبلغ من رصيد العضو مباشرةً."
